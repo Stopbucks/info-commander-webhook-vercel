@@ -1,0 +1,7 @@
+# requirements.txt
+# 單純執行WEBHOOK  
+# 架設在vercel 以另外專案執行
+
+Flask==3.0.0
+requests==2.31.0
+supabase==2.3.4
