@@ -47,69 +47,71 @@ def extract_title(text):
     return None
 
 # =========================================================
-# 🚀 核心 Webhook 接收端點
+# 🚀 核心 Webhook 接收端點 (防彈裝甲強化版)
 # =========================================================
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
+    """接收 TG 回覆，確保不論發生什麼，都回傳 200 OK 給 Telegram"""
     try:
-        # 1. 接收並解析 TG 傳來的 JSON 數據包
+        # 1. 解析數據包
         data = request.json
         if not data or 'message' not in data:
-            return jsonify({"status": "ignored", "reason": "非一般訊息"}), 200
+            return jsonify({"status": "ignored"}), 200
 
         msg = data['message']
         chat_id = str(msg.get('chat', {}).get('id', ''))
 
-        # 2. 身份驗證：只處理來自「逆向工程指揮所」的訊息
-        if chat_id != TELEGRAM_CHAT_ID:
-            return jsonify({"status": "ignored", "reason": "非指定指揮所"}), 200
+        # 2. 身份與動作驗證 (僅限指揮所與回覆訊息)
+        if chat_id != TELEGRAM_CHAT_ID or 'reply_to_message' not in msg:
+            return jsonify({"status": "ignored"}), 200
 
-        # 3. 動作驗證：只處理「回覆 (Reply)」的訊息
-        if 'reply_to_message' not in msg:
-            return jsonify({"status": "ignored", "reason": "非回覆訊息"}), 200
-
+        # 3. 智慧萃取標題與指令
         original_text = msg['reply_to_message'].get('text', '')
         user_command = msg.get('text', '').strip()
-
-        # 4. 智慧萃取標題：呼叫多重感測器尋找特徵字
         target_title = extract_title(original_text)
+
         if not target_title:
-            return jsonify({"status": "ignored", "reason": "找不到標題特徵"}), 200
+            return jsonify({"status": "no_title_found"}), 200
 
-        # 💡 防呆註解：將標題限制在前 30 個字元以內，避免超長字串導致資料庫搜尋失效
-        search_keyword = target_title[:30] 
-        print(f"🎯 攔截指令: {user_command} | 模糊搜尋目標: {search_keyword}")
-
-        # 5. 模糊搜尋任務 ID (使用 ilike)
+        # 4. 準備寫入資料庫 (隔離執行，確保資料優先入庫)
         task_id = None
         status = "not_found"
-        if sb:
-            # 使用 search_keyword 進行比對
-            q_res = sb.table("mission_queue").select("id").ilike("episode_title", f"%{search_keyword}%").limit(1).execute()
-            if q_res.data and len(q_res.data) > 0:
-                task_id = q_res.data[0]['id']
-                status = "pending"
+        search_keyword = target_title[:30] 
 
-        # 6. 寫入逆向工程任務表 (mission_reverse)
-        if sb:
-            payload = {
-                "task_id": task_id,
-                "target_prompt": user_command,
-                "status": status
-            }
-            sb.table("mission_reverse").insert(payload).execute()
-            print("✅ 任務已登錄 Supabase")
+        try:
+            if sb:
+                # 模糊搜尋母表任務
+                q_res = sb.table("mission_queue").select("id").ilike("episode_title", f"%{search_keyword}%").limit(1).execute()
+                if q_res.data:
+                    task_id = q_res.data[0]['id']
+                    status = "pending"
+                
+                # 寫入逆向任務表 (這是最關鍵的一步)
+                sb.table("mission_reverse").insert({
+                    "task_id": task_id,
+                    "target_prompt": user_command,
+                    "status": status
+                }).execute()
+                print(f"✅ 任務存檔成功: {status}")
+        except Exception as db_err:
+            print(f"❌ 資料庫寫入異常: {db_err}") # 僅記錄，不崩潰
 
-        # 7. 遠端喚醒 GitHub Actions (僅在成功找到任務時發射)
-        if task_id and GITHUB_PAT:
-            trigger_github_action()
+        # 5. 嘗試喚醒 GitHub Actions (僅在 pending 狀態下執行)
+        if status == "pending" and GITHUB_PAT:
+            try:
+                trigger_github_action()
+            except Exception as gha_err:
+                # 🛡️ 即使 GHA 喚醒失敗，由於資料已在 Supabase 設為 pending，保底巡邏會接手
+                print(f"⚠️ GHA 喚醒暫時失靈: {gha_err}")
 
+        # 🎖️ 優雅退場：給 Telegram 一個交代
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        print(f"💥 Webhook 崩潰: {str(e)}")
-        # 🛡️ 絕對防禦：即使出錯，也要回傳 200，防止 TG 伺服器無限重試轟炸
-        return jsonify({"status": "error"}), 200
+        # 🛡️ 最終防線：捕捉所有非預期錯誤，嚴禁拋出 500 錯誤
+        print(f"🔥 核心防禦系統啟動: {str(e)}")
+        return jsonify({"status": "fail_but_handled"}), 200
+
 
 # =========================================================
 # 📡 遠端信號發射器
