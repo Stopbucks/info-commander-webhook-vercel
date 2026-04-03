@@ -17,6 +17,11 @@ GITHUB_PAT = os.environ.get("GITHUB_PAT")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
+# 💡 防呆註解：這裡是填寫「新兵 DeepRethink_bot」的金鑰！
+# 絕對不要填成舊廣播兵 (Info Commander) 的金鑰，本質完全不同！
+# 
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+
 # 🎯 GHA 喚醒目標 (依據您的截圖設定)
 GITHUB_USER = "Stopbucks"
 GITHUB_REPO = "info-commander-deepthink"
