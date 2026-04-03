@@ -1,7 +1,8 @@
 # ---------------------------------------------------------
-# 程式碼：api/index.py (Vercel Serverless Webhook 路由 V2 智慧尋標版)
+# 程式碼：api/index.py (Vercel Serverless Webhook 路由 V2.1 智慧尋標版)
 # 職責：接收 TG 回覆 -> 智慧萃取標題 -> 寫入 Supabase -> 喚醒 GHA
 # 原則：極簡防崩潰。無論 TG 訊息，皆回傳 200 OK 給 TG。(帶有reply的訊息，則執行職責)
+# 修改：多數情況都是去叫 GHA 執行後續複雜任務
 # ---------------------------------------------------------
 from flask import Flask, request, jsonify
 import os, re, requests
@@ -46,6 +47,8 @@ def extract_title(text):
         
     return None
 
+
+
 # =========================================================
 # 🚀 核心 Webhook 接收端點 (防彈裝甲強化版)
 # =========================================================
@@ -76,7 +79,10 @@ def webhook():
         # 4. 準備寫入資料庫 (隔離執行，確保資料優先入庫)
         task_id = None
         status = "not_found"
-        search_keyword = target_title[:30] 
+        
+        # 💡 淨化標題：移除 Emoji 與特殊符號，大幅提升比對成功率
+        clean_title = re.sub(r'[^\w\s,.?\'"-]', '', target_title).strip()
+        search_keyword = clean_title[:30] 
 
         try:
             if sb:
@@ -87,17 +93,22 @@ def webhook():
                     status = "pending"
                 
                 # 寫入逆向任務表 (這是最關鍵的一步)
-                sb.table("mission_reverse").insert({
+                insert_payload = {
                     "task_id": task_id,
                     "target_prompt": user_command,
                     "status": status
-                }).execute()
+                }
+                # 💡 留下證據：若仍找不到，將原始標題存入 error_log 供 GHA 參考與發報
+                if status == "not_found":
+                    insert_payload["error_log"] = f"Missing Title: {target_title}"
+
+                sb.table("mission_reverse").insert(insert_payload).execute()
                 print(f"✅ 任務存檔成功: {status}")
         except Exception as db_err:
             print(f"❌ 資料庫寫入異常: {db_err}") # 僅記錄，不崩潰
 
-        # 5. 嘗試喚醒 GitHub Actions (僅在 pending 狀態下執行)
-        if status == "pending" and GITHUB_PAT:
+        # 5. 嘗試喚醒 GitHub Actions (💡 放寬限制：pending 與 not_found 皆喚醒)
+        if status in ["pending", "not_found"] and GITHUB_PAT:
             try:
                 trigger_github_action()
             except Exception as gha_err:
