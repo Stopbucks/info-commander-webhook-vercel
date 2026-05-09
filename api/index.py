@@ -103,17 +103,26 @@ def webhook():
             send_tg_reply("❌ **【尋標失敗】**\n長官，無法在您回覆的訊息中找到 **[8碼任務ID]**。\n請確認該訊息是我們新版帶有 ID 的情報戰報。", msg_id)
             return jsonify({"status": "no_id_found"}), 200
 
+
+
         task_id = None
         status = "not_found"
 
         try:
             if sb:
-                # 🚀 V3.0 升級：使用 LIKE 'id%' 進行主鍵前綴精準打擊
-                q_res = sb.table("mission_queue").select("id, episode_title").like("id", f"{short_id}%").limit(1).execute()
+                # =========================================================
+                # 🚀 V3.1 升級：UUID 區間精準掃描 (Range Scan)
+                # 捨棄 LIKE，自動補齊 8 碼信標極值，避開 PostgreSQL 型別陷阱！
+                # =========================================================
+                start_uuid = f"{short_id}-0000-0000-0000-000000000000"
+                end_uuid   = f"{short_id}-ffff-ffff-ffff-ffffffffffff"
+                
+                # 💡 注意這裡：不再檢查 scrape_status，因為即使是 archived 也要能被對位！
+                q_res = sb.table("mission_queue").select("id, episode_title").gte("id", start_uuid).lte("id", end_uuid).limit(1).execute()
                 
                 if q_res.data:
                     task_id = q_res.data[0]['id']
-                    ep_title = q_res.data[0]['episode_title'][:20] # 抓取標題供回報顯示用
+                    ep_title = q_res.data[0]['episode_title'][:20] 
                     status = "awaiting_stt" 
                 else:
                     ep_title = "未知節目"
@@ -129,6 +138,7 @@ def webhook():
                 
         except Exception as db_err:
             print(f"❌ 資料庫寫入異常: {db_err}")
+
 
         # 狀態分流：喚醒 GHA & 回報 TG
         if status == "awaiting_stt":
